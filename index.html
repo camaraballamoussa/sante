@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Surveillance Santé MQTT</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background: #f0f0f0;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+        }
+
+        .card {
+            background: #fff;
+            margin: 20px auto;
+            padding: 20px;
+            width: 90%;
+            max-width: 600px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+        }
+
+        .value {
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .hr-value {
+            color: #e74c3c;
+        }
+
+        .spo2-value {
+            color: #3498db;
+        }
+
+        .alert {
+            color: red;
+            font-weight: bold;
+            min-height: 24px;
+        }
+
+        canvas {
+            margin-top: 20px;
+            max-width: 100%;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.2/mqttws31.min.js"></script>
+    <!-- Librairie Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+
+    <h1>Surveillance Santé MQTT</h1>
+
+    <div class="card">
+        <h2>Fréquence cardiaque</h2>
+        <p><span id="hr" class="value hr-value">--</span> bpm</p>
+        <canvas id="hrChart" width="400" height="150"></canvas>
+    </div>
+
+    <div class="card">
+        <h2>Saturation en oxygène (SpO₂)</h2>
+        <p><span id="spo2" class="value spo2-value">--</span> %</p>
+        <p id="status" class="alert"></p>
+        <canvas id="spo2Chart" width="400" height="150"></canvas>
+    </div>
+
+    <!-- Librairie MQTT Paho -->
+    
+
+    <script>
+        // Initialisation données et labels pour graphiques
+        const labels = [];
+        const hrData = [];
+        const spo2Data = [];
+        const maxPoints = 20;
+
+        // Configuration commune des graphiques
+        const commonOptions = {
+            responsive: true,
+            animation: {
+                duration: 800,
+                easing: 'easeInOutQuart'
+            },
+            plugins: {
+                legend: {
+                    labels: {
+                        font: {
+                            size: 14,
+                            weight: 'bold'
+                        }
+                    }
+                },
+                tooltip: {
+                    backgroundColor: '#333',
+                    titleFont: { weight: 'bold' },
+                    bodyFont: { size: 13 }
+                }
+            },
+            scales: {
+                x: {
+                    grid: {
+                        color: '#ccc'
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: {
+                        color: '#eee'
+                    },
+                    ticks: {
+                        font: {
+                            size: 12
+                        }
+                    }
+                }
+            },
+            elements: {
+                line: {
+                    tension: 0.4,
+                    borderWidth: 3
+                },
+                point: {
+                    radius: 3,
+                    hoverRadius: 6
+                }
+            }
+        };
+
+        // Création des graphiques Chart.js
+        const hrChart = new Chart(document.getElementById('hrChart').getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Fréquence cardiaque (bpm)',
+                    data: hrData,
+                    borderColor: 'rgba(231, 76, 60, 1)',
+                    backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                    fill: true
+                }]
+            },
+            options: {
+                ...commonOptions,
+                scales: {
+                    ...commonOptions.scales,
+                    y: {
+                        ...commonOptions.scales.y,
+                        suggestedMax: 140
+                    }
+                }
+            }
+        });
+
+        const spo2Chart = new Chart(document.getElementById('spo2Chart').getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Saturation SpO₂ (%)',
+                    data: spo2Data,
+                    borderColor: 'rgba(52, 152, 219, 1)',
+                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                    fill: true
+                }]
+            },
+            options: {
+                ...commonOptions,
+                scales: {
+                    ...commonOptions.scales,
+                    y: {
+                        ...commonOptions.scales.y,
+                        min: 80,
+                        max: 100
+                    }
+                }
+            }
+        });
+
+        // Connexion au broker MQTT HiveMQ via WebSocket sécurisé (WSS)
+        const clientID = "webClient-" + Math.random().toString(16).substr(2, 8);
+        const client = new Paho.MQTT.Client("broker.hivemq.com", 8884, clientID);
+
+        client.onConnectionLost = function (responseObject) {
+            console.log("Connexion perdue : " + responseObject.errorMessage);
+            document.getElementById('status').textContent = "Connexion au broker MQTT perdue";
+        };
+
+        client.onMessageArrived = function (message) {
+            try {
+                const data = JSON.parse(message.payloadString);
+
+                // Mettre à jour les valeurs affichées
+                document.getElementById('hr').textContent = data.hr ? data.hr : '--';
+                document.getElementById('spo2').textContent = data.spo2 ? data.spo2 : '--';
+
+                if (data.hr=="null" || data.spo2=="null") {
+                    document.getElementById('status').textContent = "Doigt non détecté";
+                } else {
+                    document.getElementById('status').textContent = "";
+                }
+
+                // Ajouter les données aux graphiques
+                const now = new Date().toLocaleTimeString();
+
+                if (data.hr && data.spo2) {
+                    if (labels.length >= maxPoints) {
+                        labels.shift();
+                        hrData.shift();
+                        spo2Data.shift();
+                    }
+
+                    labels.push(now);
+                    hrData.push(data.hr);
+                    spo2Data.push(data.spo2);
+
+                    hrChart.update();
+                    spo2Chart.update();
+                }
+            } catch (e) {
+                console.error("Erreur parsing MQTT message", e);
+            }
+        };
+
+        // Connexion au broker
+        client.connect({
+            useSSL: true,  // NOTE: SSL activé pour WSS
+            onSuccess: () => {
+                console.log("Connecté au broker MQTT HiveMQ (WSS)");
+                client.subscribe("sante/oxymetre");
+                document.getElementById('status').textContent = "";
+            },
+            onFailure: (err) => {
+                console.error("Erreur connexion MQTT:", err);
+                document.getElementById('status').textContent = "";
+            }
+        });
+
+    </script>
+</body>
+
+</html>
